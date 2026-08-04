@@ -1,0 +1,7 @@
+# 仅公开当前正式发布包；旧版本回退包只保留在本地。
+dist/*
+!dist/shell-root-control-v1.2.0.zip
+
+# 不提交操作系统和本地排查产生的杂项文件。
+.DS_Store
+*.log

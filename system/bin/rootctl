@@ -1,0 +1,78 @@
+#!/system/bin/sh
+
+# 这是 ADB Shell 侧的最小客户端。它不包含 Root 权限，
+# 只通过受限 FIFO 请求 Root 服务执行 on/off/status。
+
+RUNTIME_DIR="/dev/shell-root-control"
+COMMAND_FIFO="$RUNTIME_DIR/commands"
+RESPONSE_DIR="$RUNTIME_DIR/responses"
+
+usage() {
+    printf '%s\n' '用法: rootctl on|off|status' >&2
+    exit 2
+}
+
+[ "$#" -eq 1 ] || usage
+command_name="$1"
+case "$command_name" in
+    on|off|status) ;;
+    *) usage ;;
+esac
+
+[ -p "$COMMAND_FIFO" ] || {
+    printf '%s\n' 'rootctl: 控制服务未就绪' >&2
+    exit 1
+}
+[ -d "$RESPONSE_DIR" ] || {
+    printf '%s\n' 'rootctl: 响应目录不可用' >&2
+    exit 1
+}
+
+request_id="$(cat /proc/sys/kernel/random/uuid 2>/dev/null | tr -d '-' | cut -c 1-16)"
+case "$request_id" in
+    ????????????????)
+        case "$request_id" in
+            *[!0123456789abcdef]*)
+                printf '%s\n' 'rootctl: 请求编号格式无效' >&2
+                exit 1
+                ;;
+        esac
+        ;;
+    *)
+        printf '%s\n' 'rootctl: 无法生成请求编号' >&2
+        exit 1
+        ;;
+esac
+
+request="v1 $request_id $command_name"
+response_file="$RESPONSE_DIR/$request_id"
+
+# timeout 防止守护进程未启动时，写 FIFO 永久阻塞。
+/system/bin/timeout 8 /system/bin/sh -c 'printf "%s\\n" "$1" > "$2"' sh "$request" "$COMMAND_FIFO"
+if [ "$?" -ne 0 ]; then
+    printf '%s\n' 'rootctl: 控制服务无响应' >&2
+    exit 1
+fi
+
+i=0
+while [ "$i" -lt 120 ]; do
+    if [ -f "$response_file" ]; then
+        response="$(cat "$response_file" 2>/dev/null)"
+        case "$response" in
+            "ok on") printf '%s\n' on; exit 0 ;;
+            "ok off") printf '%s\n' off; exit 0 ;;
+            "ok status on") printf '%s\n' on; exit 0 ;;
+            "ok status off") printf '%s\n' off; exit 0 ;;
+            "ok status blocked") printf '%s\n' blocked; exit 0 ;;
+            "ok status query") printf '%s\n' query; exit 0 ;;
+            "ok status restrict") printf '%s\n' restrict; exit 0 ;;
+            error\ *) printf 'rootctl: %s\n' "${response#* }" >&2; exit 1 ;;
+            *) printf '%s\n' 'rootctl: 收到无效响应' >&2; exit 1 ;;
+        esac
+    fi
+    sleep 0.1
+    i=$((i + 1))
+done
+
+printf '%s\n' 'rootctl: 等待响应超时' >&2
+exit 1
